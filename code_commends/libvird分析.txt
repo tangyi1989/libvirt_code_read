@@ -25,10 +25,9 @@ int main(){
                         回调。
     virHookCall(..., 0, "start", NULL) --> 进程状态转换为 start,并进行回调。
     qemudNetworkInit(server) --> 此处初始化监听套节字，并加入到serer->sockets,
-                                但并没有设置handler。
+                                但并没有加入到全局事件处理循环中。
     >>qemudStartEventLoop(server) --> 后台线程开始进行事件循环 ！！！
     virStateInitialize(server->privileged) --> 貌似很重要的一个东西，注释上写道
                 开始启动 HV Driver, 目前还没有搞懂。
-    qemudNetworkEnable(server)  --> 设置刚刚初始化，并加入到server->sockets中的
-                                    socket的hanlder。
+    qemudNetworkEnable(server)  --> 将刚刚的server->sockets加入到全局处理循环中
 }

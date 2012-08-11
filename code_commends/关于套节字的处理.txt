@@ -6,7 +6,7 @@ int main(...){
         .
     server = qemudInitialize()
         .       |
-        .       -> virEventRegisterDefaultImpl()
+        .       -> virEventRegisterDefaultImpl() --> 将顺便初始化全局eventLoop
         .
     qemudNetworkInit(server) --> 此处设置监听套节字
         .       |
@@ -15,7 +15,7 @@ int main(...){
         .                       QEMUD_SOCK_TYPE_TLS, auth_tls) 
         .               |
         .               v
-        .            此两步貌似仅初始化监听套节字，并没有设置 hanler.
+        .      此两步貌似仅初始化监听套节字，并没有加入到全局的事件循环中。
         .
     qemudStartEventLoop(server)
         .           |
@@ -27,8 +27,9 @@ int main(...){
         .  -> virEventAddHandle(....)   -> qemudOneLoop()
         .         |                         |
         .         v                         -> virEventRunDefaultImpl()
-        .  此处设置刚刚添加的套节字的handler    |
-        .                                       -> virEventPollRunOnce()
+        .  把刚刚初始化的监听套节字加             |
+        .  入到全局事件循环中.                    -> virEventPollRunOnce()
+        .
        END
 }
          
@@ -79,8 +80,46 @@ void virEventRegisterImpl(virEventAddHandleFunc addHandle,
 
 -----------------------------------------------------------------------------
 
-virEventPollInit() POOL的初始化函数
+virEventPollInit() POOL的初始化函数,用于初始化全局变量eventLoop
 
+/* State for the main event loop */
+struct virEventPollLoop {
+    virMutex lock;
+    int running;
+    virThread leader;
+    int wakeupfd[2];
+    size_t handlesCount;
+    size_t handlesAlloc;
+    struct virEventPollHandle *handles;
+    size_t timeoutsCount;
+    size_t timeoutsAlloc;
+    struct virEventPollTimeout *timeouts;
+};
+
+/* Only have one event loop */
+static struct virEventPollLoop eventLoop;  --> 全局唯一的，用于poll的关键变量。
+
+int virEventPollInit(void)
+{
+    virMutexInit(&eventLoop.lock)
+    pipe2(eventLoop.wakeupfd, O_CLOEXEC | O_NONBLOCK) < 0)
+    virEventPollAddHandle(eventLoop.wakeupfd[0],
+                            VIR_EVENT_HANDLE_READABLE,
+                            virEventPollHandleWakeup, NULL, NULL) < 0) 
+}
+
+注：此部分最关键的东西就是变量eventLoop,每一个需要处理的的 IO文件描述符 都会加入到 eventLoop.hanlers 中，PoolLooP循环的时候就是处理这个。
+
+/* State for a single file handle being monitored */
+struct virEventPollHandle {
+    int watch;
+    int fd;
+    int events;
+    virEventHandleCallback cb; --> 注册事件的回调函数
+    virFreeCallback ff; --> 当此handler要被删除时的回调函数
+    void *opaque;   --> 回调时的参数
+    int deleted;
+};
 
 -------------------------------------------------------------------------
 
@@ -92,7 +131,9 @@ static int qemudNetworkEnable(struct qemud_server *server) {
 
     sock = server->sockets;
     while (sock) {
-        if ((sock->watch = virEventAddHandle(sock->fd,
+        if ((sock->watch = virEventAddHandle(sock->fd, --> 此描述符，将被加入到
+                                    全局变量 eventLoop 中。
+
                                              VIR_EVENT_HANDLE_READABLE |
                                              VIR_EVENT_HANDLE_ERROR |
                                              VIR_EVENT_HANDLE_HANGUP,
@@ -103,7 +144,62 @@ static int qemudNetworkEnable(struct qemud_server *server) {
         }
 
         sock = sock->next;
-    }
-    return 0;
+   }
+   return 0;
 }
+
+---------------------------------------------------------------------------
+
+qemudDispatchServerEvent 是监听套节字的处理函数，如下：
+
+qemudDispatchServerEvent(int watch, int fd, int events, void *opaque) {
+    struct qemud_server *server = (struct qemud_server *)opaque;
+    struct qemud_socket *sock;
+
+    virMutexLock(&server->lock);
+
+    sock = server->sockets;
+
+    while (sock) {      --> 表示暂时对这个循环有些不解。
+        if (sock->watch == watch)
+            break;
+
+        sock = sock->next;
+    }
+
+    if (sock && sock->fd == fd && events)
+        qemudDispatchServer(server, sock);
+
+    virMutexUnlock(&server->lock);
+}
+
+下面的函数的会accept新的连接，对其初始化，设置handler,并将其加入到全局事件循环中
+由于此函数内容较多，现只取其骨干：
+
+static int qemudDispatchServer(qemud_server *server, qemud_socket *sock){
+    fd = accept(sock->fd, &addr.data.sa, &addr.len) --> ACCEPT!!!WOW
+
+    setsockopt (fd, IPPROTO_TCP, TCP_NODELAY, (void *)&no_slow_start,
+                sizeof no_slow_start)
+
+    VIR_ALLOC(client) --> Just memory alloc!
+    对此client的各个部分进行赋值
+
+    qemudRegisterClientEvent (server, client) --> 此函数，会将新的连接
+                       !!我们通过virsh,python或其他客户端进行的连接加入到
+                        全局事件循环中。
+}
+
+int qemudRegisterClientEvent(qemud_server *server, qemud_client *client) {
+    mode = qemudCalculateHandleMode(client);
+
+    virEventAddHandle(client->fd, mode, qemudDispatchClientEvent,
+                       server, NULL)) < 0) --> 注册到事件循环中
+}
+
+
+--------------------------------------------------------------------------
+
+qemudDispatchClientEvent 是客户端 IO socket 事件的处理函数:
+
 
