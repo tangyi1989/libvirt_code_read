@@ -1,0 +1,182 @@
+主事件循环：
+
+qemudStartEventLoop(struct qemud_server *server)
+{
+    pthread_create(&server->eventThread, &attr,qemudRunLoop,server)
+    server->hasEventThread = 1;
+}
+
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                          void *(*start_routine) (void *), void *arg);
+创建一个线程，参数说明：
+新的线程将执行调用 start_routine, 以arg为参数。
+attr 指定为 pthread_attr_t 用来标志线程属性。
+thread参数将被返回为线程的ID等。
+
+---------------------------------------------------------------------
+
+这个线程将运行在qemudRunLoop的无线循环中：
+
+static void *qemudRunLoop(void *opaque) {
+    qemud_server *server = opaque;
+    virMutexLock(&server->lock);
+    timerid = virEventAddTimeout(-1,qemudInactiveTimer,server, NULL))
+    server->nworkers = max_workers;
+    
+    for (i = 0 ; i < min_workers ; i++) 
+        qemudStartWorker(server, &server->workers[i]) < 0)  -->
+                此处将继续创建工作线程，将运行 qemudWorker。
+
+    ######### 上方初始化结束，下面进入逻辑循环 ######################
+
+    for (;!server->quitEventThread;) {
+        if (timeout > 0) {
+            if (timerActive) {
+                if (server->clients) {
+                    virEventUpdateTimeout(timerid, -1);
+                    timerActive = 0;
+                }
+            } else {
+              if (!virStateActive() &&
+                    !server->clients) {
+                    virEventUpdateTimeout(timerid, timeout * 1000);
+                    timerActive = 1;
+                }
+            }
+        }
+
+        virMutexUnlock(&server->lock);
+        if (qemudOneLoop() < 0) {       --> 这个不起眼的东西是主要逻辑！
+                                            virEventRunDefaultImpl()
+                                            最终执行这个！
+            virMutexLock(&server->lock);
+            break;
+        }
+        virMutexLock(&server->lock);
+
+    ################### 下面的错误处理省略 ########################
+                            ...
+}
+
+--------------------------------------------------------------------
+
+分析 qemuWorker, virEventDefaultImpl
+
+int virEventRunDefaultImpl(void)
+{
+    virResetLastError();
+
+    if (virEventPollRunOnce() < 0) { --> 此函数可以基本定性为监听套接字接受消息
+                                    把每一个新的链接做成一个 client ,并且接收消
+                                    息，把消息放在client->dx中，后面由worker线程
+                                    对消息进行处理。
+        
+        virDispatchError(NULL);
+        return -1;
+    }
+    return 0;
+}
+
+static void *qemudWorker(void *data)
+{
+    while (1) {
+        while ((client = qemudPendingJob(server)) == NULL) { -->
+                            此处将得到需要处理的client，准备对其消息进行处理
+
+            if(工作线程需要退出 or 出了一些错误) return NULL;
+        }
+
+        msg = qemudClientMessageQueueServe(&client->dx); -->
+                                                    得到需要处理的消息
+
+        if (remoteDispatchClientRequest (server, client, msg) < 0) -->
+             分配得到的消息，并进行处理。
+        {
+            进行错误处理
+        }
+    }
+}
+
+--------------------------------------------------------------------------
+
+分配消息的 remoteDispatchClientRequest 函数:
+注：此函数将进行判断消息类型，进行一些错误处理，并把消息交给真正的吃力函数
+
+int
+remoteDispatchClientRequest(struct qemud_server *server,
+                            struct qemud_client *client,
+                            struct qemud_client_message *msg)
+{
+    /* Check version, etc. */
+    if (msg->hdr.prog == REMOTE_PROGRAM)
+        qemu_call = false;
+    else if (msg->hdr.prog == QEMU_PROGRAM)
+        qemu_call = true;
+    else {
+        此处错误处理略。
+    }
+
+    if (!qemu_call && msg->hdr.vers != REMOTE_PROTOCOL_VERSION) {
+        goto error;
+    }
+    else if (qemu_call && msg->hdr.vers != QEMU_PROTOCOL_VERSION) {
+        此处错误处理略。
+    }
+
+    switch (msg->hdr.type) {
+    case REMOTE_CALL:
+        return remoteDispatchClientCall(server, client, msg, qemu_call);
+                --> 此处进行真正的调用。
+
+    case REMOTE_STREAM:
+        qemudClientMessageRelease(client, msg);
+        break;
+
+    default:
+        goto error;
+    }
+    return 0;
+
+error:
+    一些错误处理的代码
+}
+
+----------------------------------------------------------------------------
+
+解析消息，并且分配调用。
+
+static int
+remoteDispatchClientCall (struct qemud_server *server,
+                          struct qemud_client *client,
+                          struct qemud_client_message *msg,
+                          bool qemu_protocol)
+{
+    if (qemu_protocol)
+        data = qemuGetDispatchData(msg->hdr.proc);
+    else
+        data = remoteGetDispatchData(msg->hdr.proc);
+    ----------------以上为获取内容
+
+    conn = client->conn;
+    rv = (data->fn)(server, client, conn, &msg->hdr, &rerr, &args, &ret);
+        --> 进行分配和调用， 返回调用结果。
+
+    xdrmem_create (&xdr,
+                   msg->buffer,
+                   msg->bufferLength,
+                   XDR_ENCODE);
+    qemudClientMessageQueuePush(&client->tx, msg);
+    qemudUpdateClientEvent(client);
+
+    -----------------此3个调用向客户端发送调用结果
+}
+
+---------------------------------------------dispatch_data的结果如下:
+
+typedef struct {
+    dispatch_fn fn;
+    xdrproc_t args_filter;
+    xdrproc_t ret_filter;
+} dispatch_data;
+
+

@@ -1,0 +1,108 @@
+下面对libvirtd如何处理套节字进行分析：
+
+在main函数中：
+
+int main(...){
+        .
+    server = qemudInitialize()
+        .       |
+        .       -> virEventRegisterDefaultImpl()
+        .
+    qemudNetworkInit(server) --> 此处设置监听套节字
+        .       |
+        .       -> qemudListenUnix(server, sockname, 0, auth_unix_rw)
+        .          *remoteListenTCP (server, listen_addr, tls_port, 
+        .                       QEMUD_SOCK_TYPE_TLS, auth_tls) 
+        .               |
+        .               v
+        .            此两步貌似仅初始化监听套节字，并没有设置 hanler.
+        .
+    qemudStartEventLoop(server)
+        .           |
+        .           -> pthread_create(&server->eventThread, 
+        .                    &attr,qemudRunLoop,server)
+        .                       |
+    qemudNetworkEnable(server)  -> qemudRunLoop(server)
+        .  |                            |
+        .  -> virEventAddHandle(....)   -> qemudOneLoop()
+        .         |                         |
+        .         v                         -> virEventRunDefaultImpl()
+        .  此处设置刚刚添加的套节字的handler    |
+        .                                       -> virEventPollRunOnce()
+       END
+}
+         
+说明： 
+virEventRegisterDefaultImpl() 用来注册事件。
+virEventPollRunOnce() 在一个循环中，会用来处理事件。
+
+---------------------------------------------------------------------
+
+virEventRegisterDefaultImpl的处理：
+
+int virEventRegisterDefaultImpl(void)
+{
+    virResetLastError();
+
+    virEventPollInit();
+
+    virEventRegisterImpl(
+        virEventPollAddHandle,
+        virEventPollUpdateHandle,
+        virEventPollRemoveHandle,
+        virEventPollAddTimeout,
+        virEventPollUpdateTimeout,
+        virEventPollRemoveTimeout
+        );
+
+    return 0;
+}
+
+virEventRegisterImpl(...)如下：
+
+void virEventRegisterImpl(virEventAddHandleFunc addHandle,
+                          virEventUpdateHandleFunc updateHandle,
+                          virEventRemoveHandleFunc removeHandle,
+                          virEventAddTimeoutFunc addTimeout,
+                          virEventUpdateTimeoutFunc updateTimeout,
+                          virEventRemoveTimeoutFunc removeTimeout)
+{
+    addHandleImpl = addHandle;
+    updateHandleImpl = updateHandle;
+    removeHandleImpl = removeHandle;
+    addTimeoutImpl = addTimeout;
+    updateTimeoutImpl = updateTimeout;
+    removeTimeoutImpl = removeTimeout;
+}
+
+只是简单的给函数指针赋值。更多的略此处略。
+
+-----------------------------------------------------------------------------
+
+virEventPollInit() POOL的初始化函数
+
+-------------------------------------------------------------------------
+
+注：下面的函数将会给上面上面初始化并且添加到 server->sockets 中的套节字设置
+handler.
+
+static int qemudNetworkEnable(struct qemud_server *server) {
+    struct qemud_socket *sock;
+
+    sock = server->sockets;
+    while (sock) {
+        if ((sock->watch = virEventAddHandle(sock->fd,
+                                             VIR_EVENT_HANDLE_READABLE |
+                                             VIR_EVENT_HANDLE_ERROR |
+                                             VIR_EVENT_HANDLE_HANGUP,
+                                             qemudDispatchServerEvent,
+                                             server, NULL)) < 0) {
+            VIR_ERROR(_("Failed to add server event callback"));
+            return -1;
+        }
+
+        sock = sock->next;
+    }
+    return 0;
+}
+

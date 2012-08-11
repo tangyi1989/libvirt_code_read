@@ -1,0 +1,34 @@
+libvirt启动过程分析
+
+将按照一般性的启动过程和一般性的方式去分析启动过程，按照单进程模型进行分析，并不分析进程模型和通信模型。
+
+注：
+*为可选步骤(根据启动参数进行选择)
+>>表示spawn出来一个线程或者进程，程序继续运行。
+
+int main(){
+    设置本地化支持
+    virInitialize() --> 加载Driver模块(VirDriverLoadModule)
+    解析程序的参数
+    设置需要读取配置文件
+    *chroot and daemonize (if godaemon)
+    *创建PID文件
+    *确定rundir存在 (默认 /run/libvirt)
+    设置进程权限 --> 让进程以非root的权限运行()
+    gnutls_global_init() --> 设置通信加密方式
+    server = qemudInitialize() --> 初始化锁和加载各个模块(virDriverLoadModule)
+            此处加载qemu这个模块,网络模块和其他模块。
+            server 的结构为 struct qemud_server。
+    daemonSetupSignals(server) --> 处理信号，注册信号处理函数
+    remoteReadConfigFile (server, remote_config_file) --> 读取配置文件
+    virHookInitialize() --> 初始化一些数据结构，在进程状态发生变化的时候进行
+                        回调。
+    virHookCall(..., 0, "start", NULL) --> 进程状态转换为 start,并进行回调。
+    qemudNetworkInit(server) --> 此处初始化监听套节字，并加入到serer->sockets,
+                                但并没有设置handler。
+    >>qemudStartEventLoop(server) --> 后台线程开始进行事件循环 ！！！
+    virStateInitialize(server->privileged) --> 貌似很重要的一个东西，注释上写道
+                开始启动 HV Driver, 目前还没有搞懂。
+    qemudNetworkEnable(server)  --> 设置刚刚初始化，并加入到server->sockets中的
+                                    socket的hanlder。
+}

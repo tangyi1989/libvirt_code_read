@@ -1,0 +1,129 @@
+一个主要的数据结构 qemud_server
+小结论: 这些数据结构都是用于网络编程读写方面的，控制虚拟机的层面还是要看
+virConnection
+
+/* Main server state */
+struct qemud_server {
+    virMutex lock;      -->同下
+    virCond job;        -->此结构用于并发控制。 
+
+    int privileged;
+
+    size_t nworkers;
+    size_t nactiveworkers;
+    struct qemud_worker *workers;   -->一个workder代表一个后台工作线程
+    size_t nsockets;
+    struct qemud_socket *sockets;   -->一个sockeet形成的单项链表
+    size_t nclients;
+    size_t nclients_max;
+    struct qemud_client **clients;  -->一个连接就是一个qemud_client?
+
+    int sigread;
+    int sigwrite;
+    char *logDir;
+    pthread_t eventThread;
+    unsigned int hasEventThread :1;
+    unsigned int quitEventThread :1;
+# ifdef HAVE_AVAHI
+    struct libvirtd_mdns *mdns;
+# endif
+# if HAVE_SASL
+    char **saslUsernameWhitelist;
+# endif
+# if HAVE_POLKIT0
+    DBusConnection *sysbus;
+# endif
+};
+
+
+下面对另外3个数据结构进行分析 qemud_worker, qemud_socket, qemud_client：
+
+
+/* Stores the per-client connection state */
+struct qemud_client {
+    virMutex lock;
+
+    int magic;
+
+    int fd;     --> socket描述符
+    int watch;
+    unsigned int readonly :1;
+    unsigned int closing :1;
+    int domainEventCallbackID[VIR_DOMAIN_EVENT_ID_LAST];
+
+    virSocketAddr addr;
+    const char *addrstr;
+
+    int type; /* qemud_sock_type */
+    gnutls_session_t tlssession;    --> 有关加密的东西
+    int auth;
+    unsigned int handshake :1; /* If we're in progress for TLS handshake */
+# if HAVE_SASL                      --> Simple Authentication and Security Layer 用户加密和认证
+    sasl_conn_t *saslconn;
+    int saslSSF;
+    const char *saslDecoded;
+    unsigned int saslDecodedLength;
+    unsigned int saslDecodedOffset;
+    const char *saslEncoded;
+    unsigned int saslEncodedLength;
+    unsigned int saslEncodedOffset;
+    char *saslUsername;
+    char saslTemporary[8192]; /* temorary holds data to be decoded */
+# endif
+
+    /* Count of meages in 'dx' or 'tx' queue
+     * ie RPC calls in progress. Does not count
+     * async events which are not used for
+     * throttling calculations */
+    int nrequests;
+    /* Zero or one messages being received. Zero if
+     * nrequests >= max_clients and throttling */
+    struct qemud_client_message *rx;
+    /* Zero or many messages waiting for a worker
+     * to process them */
+    struct qemud_client_message *dx;
+    /* Zero or many messages waiting for transmit
+     * back to client, including async events */
+    struct qemud_client_message *tx;
+    /* Filters to capture messages that would otherwise
+     * end up on the 'dx' queue */
+    struct qemud_client_filter *filters; --> libvirt 貌似可以做成基于RPC的集群
+
+    /* Data streams */
+    struct qemud_client_stream *streams;
+
+
+    /* This is only valid if a remote open call has been made on this
+     * connection, otherwise it will be NULL.  Also if remote close is
+     * called, it will be set back to NULL if that succeeds.
+     */
+    virConnectPtr conn;         --> 这个结构貌似很重要，是真正虚拟层的东西
+    int refs;
+
+};
+
+
+struct qemud_socket {
+    char *path;
+
+    virSocketAddr addr;
+    const char *addrstr;
+
+    int fd;
+    int watch;
+    int readonly;
+    int type; /* qemud_sock_type */
+    int auth;
+
+    struct qemud_socket *next;
+};
+
+struct qemud_worker {
+    pthread_t thread;
+    unsigned int hasThread :1;
+    unsigned int processingCall :1;
+    unsigned int quitRequest :1;
+
+    /* back-pointer to our server */
+    struct qemud_server *server;
+};

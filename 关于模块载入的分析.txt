@@ -1,0 +1,64 @@
+--载入Driver的时候的时候分为两种：静态的和动态库的方式。
+
+如果编译时加上了--with-driver-modules参数，会采用动态库的方式，载入Driver时调用virDriverLoadModule，否则直接把这些库给静态编译出来，注册时直接调用xxxRegister()。
+
+--在这个上面浪费了两个小时。
+
+下面是virDriverLoadModule的主要过程:
+
+void* virDriverLoadModule(const char *name)
+{
+    moddir = getenv("LIBVIRT_DRIVER_DIR") or 
+            DEFAULT_DRIVER_DIR if moddir is null --> 获取所要加载模块的地址。
+
+    virAsprintf(&modfile, "%s/libvirt_driver_%s.so", moddir, name)
+                --> 组合成所需要的模块的据对地址(如qemu 在默认情况下，其mod的
+                    绝对路径为 )
+
+    handle = dlopen(modfile, RTLD_NOW | RTLD_LOCAL); --> 打开动态链接库
+    virAsprintf(&regfunc, "%sRegister", name);
+    regsym = dlsym(handle, regfunc); --> regsym为调用地址，之后可直接调用
+    VIR_FREE(modfile);
+    VIR_FREE(regfunc);
+
+    return handle;
+}
+
+--------------------------------------------------------------------------
+
+下面分析 virInitialize:
+
+此函数主要用于加载dirver
+virInitialize(void)
+{
+    #ifdef WITH_DRIVER_MODULES
+        virDriverLoadModule("test") --> 类似与这样把插件都加载下，动态库
+            ...
+    #else
+        testRegister() --> 直接注册
+            ...
+    #endif
+}
+
+-------------------------------------------------------------------------
+
+下面分析 qemuRegister:
+
+/*只是简单注册了Driver，把这些driver加入到全局变量中,某些类型的driver会注册更多东西*/
+int qemuRegister(void) {
+    virRegisterDriver(&qemuDriver);
+    virRegisterStateDriver(&qemuStateDriver);
+    virNWFilterRegisterCallbackDriver(&qemuCallbackDriver);
+    return 0;
+}
+
+int virRegisterDriver(virDriverPtr driver)
+{
+    virDriverTab[virDriverTabCount] = driver; --> 所谓注册就是正如这样，把新的
+                            driver 加入到我们的全局变量中来，供之后选择。
+    return virDriverTabCount++;
+}
+
+其他的几个注册，与之类似。
+
+

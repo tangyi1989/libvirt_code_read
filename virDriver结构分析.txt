@@ -1,0 +1,23 @@
+Driver的结构如下:
+
+/**
+ * _virDriver:
+ *
+ * Structure associated to a virtualization driver, defining the various
+ * entry points for it.
+ *
+ * All drivers must support the following fields/methods:
+ *  - no
+ *  - name
+ *  - open
+ *  - close
+ */
+
+struct _virDriver {
+    int        no;  /* the number virDrvNo */
+    const char * name;  /* the name of the driver */
+    virDrvOpen          open;
+    virDrvClose         close;
+    virDrvDrvSupportsFeature   supports_feature;
+    ... --> 下面若干是一些方法
+}
