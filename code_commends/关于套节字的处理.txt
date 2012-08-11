@@ -81,6 +81,7 @@ void virEventRegisterImpl(virEventAddHandleFunc addHandle,
 
 virEventPollInit() POOL的初始化函数
 
+
 -------------------------------------------------------------------------
 
 注：下面的函数将会给上面上面初始化并且添加到 server->sockets 中的套节字设置
