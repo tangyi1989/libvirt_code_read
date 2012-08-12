@@ -13,7 +13,8 @@ struct qemud_server {
     size_t nactiveworkers;
     struct qemud_worker *workers;   -->一个workder代表一个后台工作线程
     size_t nsockets;
-    struct qemud_socket *sockets;   -->一个sockeet形成的单项链表
+    struct qemud_socket *sockets;   -->一个socket形成的单项链表，表示这个里面
+                                        都是 listen socket.
     size_t nclients;
     size_t nclients_max;
     struct qemud_client **clients;  -->一个连接就是一个qemud_client?
@@ -21,7 +22,7 @@ struct qemud_server {
     int sigread;
     int sigwrite;
     char *logDir;
-    pthread_t eventThread;
+    pthread_t eventThread;          --> qemuEventLoop线程ID而已。
     unsigned int hasEventThread :1;
     unsigned int quitEventThread :1;
 # ifdef HAVE_AVAHI
@@ -40,7 +41,7 @@ struct qemud_server {
 
 
 /* Stores the per-client connection state */
-struct qemud_client {
+struct qemud_client { --> 代表一个
     virMutex lock;
 
     int magic;
@@ -58,59 +59,33 @@ struct qemud_client {
     gnutls_session_t tlssession;    --> 有关加密的东西
     int auth;
     unsigned int handshake :1; /* If we're in progress for TLS handshake */
-# if HAVE_SASL                      --> Simple Authentication and Security Layer 用户加密和认证
-    sasl_conn_t *saslconn;
-    int saslSSF;
-    const char *saslDecoded;
-    unsigned int saslDecodedLength;
-    unsigned int saslDecodedOffset;
-    const char *saslEncoded;
-    unsigned int saslEncodedLength;
-    unsigned int saslEncodedOffset;
-    char *saslUsername;
-    char saslTemporary[8192]; /* temorary holds data to be decoded */
-# endif
+    
+    /*此处有一些有关加密安全的域，因为有些烦人，被我去掉*/
 
-    /* Count of meages in 'dx' or 'tx' queue
-     * ie RPC calls in progress. Does not count
-     * async events which are not used for
-     * throttling calculations */
     int nrequests;
-    /* Zero or one messages being received. Zero if
-     * nrequests >= max_clients and throttling */
-    struct qemud_client_message *rx;
-    /* Zero or many messages waiting for a worker
-     * to process them */
-    struct qemud_client_message *dx;
-    /* Zero or many messages waiting for transmit
-     * back to client, including async events */
-    struct qemud_client_message *tx;
-    /* Filters to capture messages that would otherwise
-     * end up on the 'dx' queue */
-    struct qemud_client_filter *filters; --> libvirt 貌似可以做成基于RPC的集群
+    struct qemud_client_message *rx; --> 正在接受的消息。
+    struct qemud_client_message *dx; --> 需要让工作线程处理的消息。
+    struct qemud_ciient_message *tx; --> 返回给客户端的消息队列。
+    struct qemud_client_filter *filters; --> 用来过滤接收到的message,不符合的
+                            消息，将被丢弃掉。
 
-    /* Data streams */
     struct qemud_client_stream *streams;
 
-
-    /* This is only valid if a remote open call has been made on this
-     * connection, otherwise it will be NULL.  Also if remote close is
-     * called, it will be set back to NULL if that succeeds.
-     */
-    virConnectPtr conn;         --> 这个结构貌似很重要，是真正虚拟层的东西
+    virConnectPtr conn;         --> 这个结构貌似很重要，是真正虚拟层的东西。
+                                现在很好奇的是，这个是什么时候初始化的。
     int refs;
 
 };
 
 
-struct qemud_socket {
+struct qemud_socket { --> 貌似此种类型全部被当作监听套接字了。
     char *path;
 
     virSocketAddr addr;
     const char *addrstr;
 
     int fd;
-    int watch;
+    int watch;              --> What is watch?
     int readonly;
     int type; /* qemud_sock_type */
     int auth;
@@ -127,3 +102,18 @@ struct qemud_worker {
     /* back-pointer to our server */
     struct qemud_server *server;
 };
+
+
+struct qemud_client_message { --> 看到这里就知道上面为什么需要3个消息队列了。
+    char buffer [REMOTE_MESSAGE_MAX + REMOTE_MESSAGE_HEADER_XDR_LEN];
+    unsigned int bufferLength;
+    unsigned int bufferOffset;
+
+    unsigned int async : 1;
+    unsigned int streamTX : 1;
+
+    remote_message_header hdr;
+
+    struct qemud_client_message *next;
+};
+

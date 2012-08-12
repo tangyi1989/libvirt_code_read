@@ -171,7 +171,7 @@ qemudDispatchServerEvent(int watch, int fd, int events, void *opaque) {
         qemudDispatchServer(server, sock);
 
     virMutexUnlock(&server->lock);
-}
+}qemudDispatchServer
 
 下面的函数的会accept新的连接，对其初始化，设置handler,并将其加入到全局事件循环中
 由于此函数内容较多，现只取其骨干：
@@ -202,4 +202,49 @@ int qemudRegisterClientEvent(qemud_server *server, qemud_client *client) {
 
 qemudDispatchClientEvent 是客户端 IO socket 事件的处理函数:
 
+static void
+qemudDispatchClientEvent(int watch, int fd, int events, void *opaque){
+    server = opaque
+    client = findClientObjectInServer(server, fd) --> 我杜撰出来的函数，用来
+                             简化代码，从server->clients中查找到我们的client
 
+    if (events & (VIR_EVENT_HANDLE_WRITABLE |
+                  VIR_EVENT_HANDLE_READABLE)) {
+        if (client->handshake) {
+            qemudDispatchClientHandshake(client); --> 握手？貌似属于Cert的一部分
+        } else {
+            if (events & VIR_EVENT_HANDLE_WRITABLE)
+                qemudDispatchClientWrite(client);
+            if (events & VIR_EVENT_HANDLE_READABLE)
+                qemudDispatchClientRead(server, client); --> 读取流，组包，过滤
+        }
+    }
+}
+
+此函数的代码略，同大部分读取套节字的代码一样。只把重要部分类出
+sszie_t qemudDispatchClientRead(qemud_client *client)
+{
+    把能读的流都给读了，能组包的就组包。
+    不能组包的就扔到缓冲区。
+
+    qemud_client_message *msg = qemudClientMessageQueueServe(&client->rx);
+    
+    if (remoteDecodeClientMessageHeader(msg) < 0) {
+        qemudDispatchClientFailure(client);
+    }
+    
+    filter = client->filters; --> 我很好奇，这个是什么时候初始化的。
+    
+    while (filter) {    --> 把不符合 filter 的消息给过滤掉。
+        ret = (filter->query)(client, msg, filter->opaque);
+        if (ret == 1) {msg = NULL; break;}
+        else if (ret == -1) {qemudDispatchClientFailure(client);return; }
+        filter = filter->next;
+    }
+
+    if (msg) qemudClientMessageQueuePush(&client->dx, msg); -->
+                                    把合格的消息放到消息队列中。
+    qemudUpdateClientEvent(client);
+    virCondSignal(&server->job); --> 通知工作线程，有活干了，之后工作线程会从
+                                    client的取msg进行处理。
+}
