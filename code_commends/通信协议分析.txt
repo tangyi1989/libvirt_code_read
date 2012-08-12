@@ -1,0 +1,90 @@
+
+Clinet 和 Server 之间的通信都会被接收到如下的格式中：
+
+Each message consists of:
+
+   Name    | Type                  | Description
+-----------+-----------------------+------------------
+   Length  | int                   | 整个消息的长度，包括Length本身
+   Header  | remote_message_header | Control information about procedure call
+   Payload | -                     | Variable payload data per procedure
+
+消息如下定义：
+
+struct qemud_client_message {
+    char buffer [REMOTE_MESSAGE_MAX + REMOTE_MESSAGE_HEADER_XDR_LEN];
+    unsigned int bufferLength;
+    unsigned int bufferOffset;
+
+    #########以上三个域，主要是一个用于接受通信流的缓冲区，包括整个消息的内容。
+
+    unsigned int async : 1;
+    unsigned int streamTX : 1;
+
+    remote_message_header hdr;  --> 指示消息的类型，指导下一步如何解析。
+
+    struct qemud_client_message *next; --> 用户所有的消息会形成单向链表保存在
+                client结构中，每个用户都会有3个消息队列，详细观看数据机构分析。
+};
+
+在接收完毕之后，header将被填充。
+
+qemud_client_message 的定义如下：
+
+struct remote_message_header {
+        u_int                      prog;    --> 客户端程序的类型
+        u_int                      vers;    --> 客户端通讯协议的版本号
+        int                        proc;    --> !!!客户端需要调用的类型
+        remote_message_type        type;    -->
+        u_int                      serial;
+        remote_message_status      status;
+};
+
+在进行消息解析时：
+dispatch_data const *qemuGetDispatchData(int proc)
+{
+    return &(qemu_dispatch_table[proc]);
+}
+
+qemu_dispatch_table 这个列表函数表 daemon/remote_generator.pl 生成, 现已置于本文件夹下的 dispatch_code 中。
+
+调用时结构如下：
+
+    if (qemu_protocol)
+        data = qemuGetDispatchData(msg->hdr.proc);
+    else
+        data = remoteGetDispatchData(msg->hdr.proc);
+
+    rv = (data->fn)(server, client, conn, &msg->hdr, &rerr, &args, &ret);
+
+调用的 args 如此获得：
+
+    /* De-serialize payload with args from the wire message */
+    xdrmem_create (&xdr,
+                   msg->buffer + msg->bufferOffset,
+                   msg->bufferLength - msg->bufferOffset,
+                   XDR_DECODE);
+    if (!((data->args_filter)(&xdr, &args))) {
+        xdr_destroy (&xdr);
+        remoteDispatchFormatError (&rerr, "%s", _("parse args failed"));
+        goto rpc_error;
+    }
+    xdr_destroy (&xdr);
+
+data 的结构如下：
+
+typedef struct {
+    dispatch_fn fn;
+    xdrproc_t args_filter;
+    xdrproc_t ret_filter;
+} dispatch_data;
+
+dispatch_fn 的定义为：
+
+typedef int (*dispatch_fn) (struct qemud_server *server,
+                            struct qemud_client *client,
+                            virConnectPtr conn,
+                            remote_message_header *hdr,
+                            remote_error *err,
+                            dispatch_args *args,
+                            dispatch_ret *ret);
