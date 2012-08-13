@@ -61,7 +61,9 @@ do_open (const char *name, virConnectAuthPtr auth, int flags)
             break;
         }
     }
-    
+   
+   /*I am puzzled by these drivers, it may need to be debug for more info*/
+ 
     for (i = 0; i < virNetworkDriverTabCount; i++) {
 
         res = virNetworkDriverTab[i]->open (ret, auth, flags);
@@ -92,10 +94,10 @@ do_open (const char *name, virConnectAuthPtr auth, int flags)
     站且不去理会他们的作用，即使理会也理解不了，他们依次是:
 
         StorageDriver (for storage)
-        DeviceMonitor (Node driver)
+        DeviceMonitor (Node driver)  /*device-mapper driver is used */
         SecretDriver (注释上写道Secret manipulation driver，这货是神码奇葩)
         NWFilterDriver (！这个最神奇，虚拟网络的安全全靠他了，对这个很感兴趣)
-
+                       /*the lib "libnl" may be used by this driver*/
     return ret
 }
 
