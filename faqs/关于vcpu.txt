@@ -1,0 +1,146 @@
+问：
+在libvirt的定义中：
+<domain> ... <cputune> <vcpupin vcpu="0" cpuset="1-4,^2"/> <vcpupin vcpu="1" cpuset="0,1"/> <vcpupin vcpu="2" cpuset="2,3"/> <vcpupin vcpu="3" cpuset="0,4"/> <shares>2048</shares> <period>1000000</period> <quota>-1</quota> </cputune> ...</domain>
+我现在想知道3者之间的关系和物理cpu之间的关系
+
+答：
+下面的代码来子 src/qemu_process.c 中：
+
+/* Set CPU affinites for vcpus if vcpupin xml provided. */
+static int
+qemuProcessSetVcpuAffinites(virConnectPtr conn,
+                            virDomainObjPtr vm)
+{
+
+    if (virNodeGetInfo(conn, &nodeinfo) != 0) { --> 得到宿主的信息，CPU,RAM等。
+        return  -1;
+    }
+
+    if (!def->cputune.nvcpupin) --> 我们在libvirt.xml中定义的vcpupin参数的数量。
+        return 0;
+
+    if (priv->vcpupids == NULL) {   --> 在qemu中一个虚拟机的内核是一个进程或线程，即一个cpu单元。将通过调成进程或线程优先级，来对虚拟机的性能进行调整。
+
+        return -1;
+    }
+
+    hostcpus = VIR_NODEINFO_MAXCPUS(nodeinfo);
+    cpumaplen = VIR_CPU_MAPLEN(hostcpus);   --> What this mean?
+    maxcpu = cpumaplen * 8;
+
+    #####################以上三个参数貌似是在获取最大性能信息。
+
+    if (maxcpu > hostcpus)
+        maxcpu = hostcpus;
+
+    if (VIR_ALLOC_N(cpumap, cpumaplen) < 0) {
+        virReportOOMError();
+        return -1;
+    }
+
+    for (vcpu = 0; vcpu < def->cputune.nvcpupin; vcpu++) {
+        if (vcpu != def->cputune.vcpupin[vcpu]->vcpuid)
+            continue;
+
+        int i;
+
+        memset(cpumap, 0, cpumaplen);
+        cpumask = (unsigned char *)def->cputune.vcpupin[vcpu]->cpumask;
+        vcpupid = priv->vcpupids[vcpu];
+
+        /* Convert cpumask to bitmap here. */
+        for (i = 0; i < VIR_DOMAIN_CPUMASK_LEN; i++) {
+            int cur = 0;
+            int mod = 0;
+
+            if (i) {
+                cur = i / 8;
+                mod = i % 8;
+            }
+
+            if (cpumask[i])
+                cpumap[cur] |= 1 << mod;
+        }
+        if (virProcessInfoSetAffinity(vcpupid,
+                                      cpumap,
+                                      cpumaplen,
+                                      maxcpu) < 0) {
+            goto cleanup;
+        }
+    }
+
+    ret = 0;
+cleanup:
+    VIR_FREE(cpumap);
+    return ret;
+}
+
+
+int virProcessInfoSetAffinity(pid_t pid,
+                              const unsigned char *map,
+                              size_t maplen,
+                              int maxcpu)
+{
+    int i;
+# ifdef CPU_ALLOC
+    /* New method dynamically allocates cpu mask, allowing unlimted cpus */
+    int numcpus = 1024;
+    size_t masklen;
+    cpu_set_t *mask;
+
+    /* Not only may the statically allocated cpu_set_t be too small,
+     * but there is no way to ask the kernel what size is large enough.
+     * So you have no option but to pick a size, try, catch EINVAL,
+     * enlarge, and re-try.
+     *
+     * http://lkml.org/lkml/2009/7/28/620
+     */
+realloc:
+    masklen = CPU_ALLOC_SIZE(numcpus);
+    mask = CPU_ALLOC(numcpus);
+
+    if (!mask) {
+        virReportOOMError();
+        return -1;
+    }
+
+    CPU_ZERO_S(masklen, mask);
+    for (i = 0 ; i < maxcpu ; i++) {
+        if (VIR_CPU_USABLE(map, maplen, 0, i))
+            CPU_SET_S(i, masklen, mask);
+    }
+
+    if (sched_setaffinity(pid, masklen, mask) < 0) {
+        CPU_FREE(mask);
+        if (errno == EINVAL &&
+            numcpus < (1024 << 8)) { /* 262144 cpus ought to be enough for anyone */
+            numcpus = numcpus << 2;
+            goto realloc;
+        }
+        virReportSystemError(errno,
+                             _("cannot set CPU affinity on process %d"), pid);
+        return -1;
+    }
+    CPU_FREE(mask);
+# else
+    /* Legacy method uses a fixed size cpu mask, only allows upto 1024 cpus */
+    cpu_set_t mask;
+
+    CPU_ZERO(&mask);
+    for (i = 0 ; i < maxcpu ; i++) {
+        if (VIR_CPU_USABLE(map, maplen, 0, i))
+            CPU_SET(i, &mask);
+    }
+
+    if (sched_setaffinity(pid, sizeof(mask), &mask) < 0) {  -->
+                    此函数是UNIX的函数，最终将会通过调整进程的优先级。
+
+        virReportSystemError(errno,
+                             _("cannot set CPU affinity on process %d"), pid);
+        return -1;
+    }
+# endif
+
+    return 0;
+}
+
