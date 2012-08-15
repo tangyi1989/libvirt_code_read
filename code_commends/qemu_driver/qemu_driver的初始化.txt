@@ -1,0 +1,97 @@
+我们使用了静态编译的方法，所以此处分析代码不考虑链接库的情况：
+
+在./daemon/libvirtd.c中
+
+int main(...)
+{
+        .
+        .
+    server = qemudInitialize()
+        .       |
+        .       -> qemuRegister(void)
+        .           |
+        .           -> virRegisterStateDriver(&qemuStateDriver)
+        .
+    virStateInitialize(server->privileged)
+        .       |
+        .       -> virStateDriverTab[i]->initialize(privileged)
+        .
+       END
+        
+}
+----------------------------------------------------------------
+
+qemuRegister在注册时仅仅注册了一下driver。
+
+int qemuRegister(void) {
+    virRegisterDriver(&qemuDriver);
+    virRegisterStateDriver(&qemuStateDriver);   --> 代表qemudriver的状态
+    virNWFilterRegisterCallbackDriver(&qemuCallbackDriver);
+    return 0;
+}
+
+其中：
+
+static virStateDriver qemuStateDriver = {
+    .name = "QEMU",
+    .initialize = qemudStartup, --> 这里会初始化qemud这个全局结构。
+    .cleanup = qemudShutdown,
+    .reload = qemudReload,
+    .active = qemudActive,
+};
+
+------------------------------------------------------------------------
+
+下面分析qemudStartup：
+
+static int qemudStartup(int privileged){
+    VIR_ALLOC(qemu_driver)
+    qemu_driver->privileged = privileged
+
+    virDomainObjListInit(&qemu_driver->domains) --> 此处应该仅仅是初始化这个链表
+    
+    /* Init domain events */
+    qemu_driver->domainEventState = 
+         virDomainEventStateNew(qemuDomainEventFlush, qemu_driver, NULL,true);
+    
+    /* Allocate bitmap for vnc port reservation */
+    qemu_driver->reservedVNCPorts =
+         virBitmapAlloc(QEMU_VNC_PORT_MAX - QEMU_VNC_PORT_MIN)
+    
+    /* read the host sysinfo */
+    if (privileged) qemu_driver->hostsysinfo = virSysinfoRead()  -->
+            他执行命令dmidecode之后，得到BIOS的信息，然后放到hostsysinfo中
+
+    初始化有关路径的变量
+
+    qemuSecurityInit(qemu_driver) --> What is security?
+
+    qemu_driver->caps = qemuCreateCapabilities(NULL, qemu_driver) 
+                                    --> 后面详细再看
+    qemu_driver->activePciHostdevs = pciDeviceListNew()
+
+    此处本应当是一堆关于文件权限控制的代码
+    
+    virDomainLoadAllConfigs(qemu_driver->caps,
+                                &qemu_driver->domains,
+                                qemu_driver->stateDir,
+                                NULL,
+                                1, NULL, NULL)
+
+    conn = virConnectOpen(qemu_driver->privileged ?
+                          "qemu:///system" :
+                          "qemu:///session");
+
+    virDomainLoadAllConfigs(qemu_driver->caps,
+                                &qemu_driver->domains,
+                                qemu_driver->configDir,
+                                qemu_driver->autostartDir,
+                                0, NULL, NULL) < 0)
+
+    virHashForEach(qemu_driver->domains.objs, qemuDomainSnapshotLoad,
+                   qemu_driver->snapshotDir);
+
+    qemu_driver->workerPool = virThreadPoolNew(0, 1, processWatchdogEvent, qemu_driver);
+    
+    qemuAutostartDomains(qemu_driver);
+}
