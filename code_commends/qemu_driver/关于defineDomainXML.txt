@@ -1,0 +1,13 @@
+当客户端向服务端向服务端发送 define domain指令的时候发生的事情。
+即 virsh define libvirt.xml 发生的事情。
+
+用 strace -f libvirtd 的方式来看看发送此信息时，接受此信息的信息。
+
+
+
+{   /* DomainDefineXML => 11 */
+    .fn = (dispatch_fn) remoteDispatchDomainDefineXML,
+    .args_filter = (xdrproc_t) xdr_remote_domain_define_xml_args,
+    .ret_filter = (xdrproc_t) xdr_remote_domain_define_xml_ret,
+},
+

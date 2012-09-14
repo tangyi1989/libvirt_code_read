@@ -67,7 +67,11 @@ static int qemudStartup(int privileged){
     qemuSecurityInit(qemu_driver) --> What is security?
 
     qemu_driver->caps = qemuCreateCapabilities(NULL, qemu_driver) 
-                                    --> 后面详细再看
+                                --> 得到虚拟化的详细信息，大概可以归结为，
+                                系统的CPU什么架构，能力如何，操作系统是什么
+                                样子的，支持什么样的虚拟机，做迁移的时候通过                                    什么样的协议来做等等。
+                                （暂时省略了安全的方面的分析）
+
     qemu_driver->activePciHostdevs = pciDeviceListNew()
 
     此处本应当是一堆关于文件权限控制的代码
@@ -89,9 +93,9 @@ static int qemudStartup(int privileged){
                                 0, NULL, NULL) < 0)
 
     virHashForEach(qemu_driver->domains.objs, qemuDomainSnapshotLoad,
-                   qemu_driver->snapshotDir);
+                   qemu_driver->snapshotDir);	--> 此处可以抽空可以注意一下！
 
     qemu_driver->workerPool = virThreadPoolNew(0, 1, processWatchdogEvent, qemu_driver);
     
-    qemuAutostartDomains(qemu_driver);
+    qemuAutostartDomains(qemu_driver); --> 启动那些设置为自动启动的虚拟机。
 }

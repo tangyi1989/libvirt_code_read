@@ -1,0 +1,101 @@
+说明：Domain就是我们的虚拟机，我们会在定义libvirt.xml的时候定义这些参数。
+
+如下：
+struct _virDomainDef {
+    int virtType;
+    int id;
+    unsigned char uuid[VIR_UUID_BUFLEN];
+    char *name;
+    char *description;
+
+    struct {
+        unsigned int weight;
+    } blkio;
+
+    struct {
+        unsigned long max_balloon;
+        unsigned long cur_balloon;
+        unsigned long hugepage_backed;
+        unsigned long hard_limit;
+        unsigned long soft_limit;
+        unsigned long min_guarantee;
+        unsigned long swap_hard_limit;
+    } mem;
+    unsigned short vcpus;
+    unsigned short maxvcpus;
+    int cpumasklen;
+    char *cpumask;
+
+    struct {
+        unsigned long shares;
+        int nvcpupin;
+        virDomainVcpupinDefPtr *vcpupin;
+    } cputune;
+
+    /* These 3 are based on virDomainLifeCycleAction enum flags */
+    int onReboot;
+    int onPoweroff;
+    int onCrash;
+
+    virDomainOSDef os;
+    char *emulator;
+    int features;
+
+    virDomainClockDef clock;
+
+    int ngraphics;
+    virDomainGraphicsDefPtr *graphics;
+
+    int ndisks;
+    virDomainDiskDefPtr *disks;
+
+    int ncontrollers;
+    virDomainControllerDefPtr *controllers;
+
+    int nfss;
+    virDomainFSDefPtr *fss;
+
+    int nnets;
+    virDomainNetDefPtr *nets;
+
+    int ninputs;
+    virDomainInputDefPtr *inputs;
+
+    int nsounds;
+    virDomainSoundDefPtr *sounds;
+
+    int nvideos;
+    virDomainVideoDefPtr *videos;
+
+    int nhostdevs;
+    virDomainHostdevDefPtr *hostdevs;
+
+    int nsmartcards;
+    virDomainSmartcardDefPtr *smartcards;
+
+    int nserials;
+    virDomainSmartcardDefPtr *smartcards;
+
+    int nserials;
+    virDomainChrDefPtr *serials;
+
+    int nparallels;
+    virDomainChrDefPtr *parallels;
+
+    int nchannels;
+    virDomainChrDefPtr *channels;
+
+    size_t nleases;
+    virDomainLeaseDefPtr *leases;
+
+    /* Only 1 */
+    virDomainChrDefPtr console;
+    virSecurityLabelDef seclabel;
+    virDomainWatchdogDefPtr watchdog;
+    virDomainMemballoonDefPtr memballoon;
+    virCPUDefPtr cpu;
+    virSysinfoDefPtr sysinfo;
+
+    void *namespaceData;
+    virDomainXMLNamespace ns;
+};

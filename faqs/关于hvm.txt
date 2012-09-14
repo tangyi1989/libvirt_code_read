@@ -1,0 +1,11 @@
+HVM Hardware-assisted virtualization
+
+################# Section : Concept - What is hvm  ##########################
+
+    In computing, hardware-assisted virtualization is a platform virtualization approach that enables efficient full virtualization using help from hardware capabilities, primarily from the host processors. Full virtualization is used to simulate a complete hardware environment, or virtual machine, in which an unmodified guest operating system (using the same instruction set as the host machine) executes in complete isolation. Hardware-assisted virtualization was added to x86 processors (Intel VT-x or AMD-V) in 2006.
+
+    Hardware-assisted virtualization is also known as accelerated virtualization; Xen calls it hardware virtual machine (HVM), Virtual Iron calls it native virtualization.
+
+    在计算机中，硬件辅助虚拟化主要是利用宿主机处理器的功能理应系统级虚拟化的方法有效的进行全虚拟化。全虚拟化是用于模拟一个完整的用于执行一个不需修改操作系统指令并且相互隔离的操作系统的硬件环境或者一个虚拟机（利用和宿主主机一样的机器指令）。硬件虚拟化。硬件辅助虚拟化在2006年被加入到x86处理器中(Intel VT-x 和 AMD-V)。
+
+    硬件辅助虚拟化也一种呗认为虚拟化加速的技术。Xen把他称为硬件虚拟化(hardware virtual machine)，Virtual Iron 称之为 本地虚拟化。
