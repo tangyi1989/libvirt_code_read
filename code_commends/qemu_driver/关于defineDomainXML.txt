@@ -11,3 +11,170 @@
     .ret_filter = (xdrproc_t) xdr_remote_domain_define_xml_ret,
 },
 
+在./daemon/remote_dispatch_bodies.h 可以查看到此代码
+
+static int
+remoteDispatchDomainDefineXML(
+    struct qemud_server *server ATTRIBUTE_UNUSED,
+    struct qemud_client *client ATTRIBUTE_UNUSED,
+    virConnectPtr conn,
+    remote_message_header *hdr ATTRIBUTE_UNUSED,
+    remote_error *rerr,
+    remote_domain_define_xml_args *args,
+    remote_domain_define_xml_ret *ret)
+{
+    int rv = -1;
+    virDomainPtr dom = NULL;
+
+    if (!conn) {
+        virNetError(VIR_ERR_INTERNAL_ERROR, "%s", _("connection not open"));
+        goto cleanup;
+    }
+
+    if ((dom = virDomainDefineXML(conn, args->xml)) == NULL) --> 这个是关键调用
+        goto cleanup;
+
+    make_nonnull_domain(&ret->dom, dom);
+    rv = 0;
+
+cleanup:
+    if (rv < 0)
+        remoteDispatchError(rerr);
+    if (dom)
+        virDomainFree(dom);
+    return rv;
+}
+
+
+/**
+ * virDomainDefineXML:
+ * @conn: pointer to the hypervisor connection
+ * @xml: the XML description for the domain, preferably in UTF-8
+ *
+ * Define a domain, but does not start it.
+ * This definition is persistent, until explicitly undefined with
+ * virDomainUndefine(). A previous definition for this domain would be
+ * overriden if it already exists.
+ *
+ * Returns NULL in case of error, a pointer to the domain otherwise
+ */
+virDomainPtr
+virDomainDefineXML(virConnectPtr conn, const char *xml) {
+    VIR_DEBUG("conn=%p, xml=%s", conn, xml);
+
+    virResetLastError();
+
+    if (!VIR_IS_CONNECT(conn)) {
+        virLibConnError(VIR_ERR_INVALID_CONN, __FUNCTION__);
+        virDispatchError(NULL);
+        return NULL;
+    }
+    if (conn->flags & VIR_CONNECT_RO) {
+        virLibConnError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
+        goto error;
+    }
+    if (xml == NULL) {
+        virLibConnError(VIR_ERR_INVALID_ARG, __FUNCTION__);
+        goto error;
+    }
+
+    if (conn->driver->domainDefineXML) {
+        virDomainPtr ret;
+        ret = conn->driver->domainDefineXML (conn, xml); --> 这个就是了，我们只
+                                                    分析在qemu driver下的调用。
+        if (!ret)
+            goto error;
+        return ret;
+    }
+
+    virLibConnError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
+
+error:
+    virDispatchError(conn);
+    return NULL;
+}
+
+static virDomainPtr qemudDomainDefine(virConnectPtr conn, const char *xml) {
+    struct qemud_driver *driver = conn->privateData;
+    virDomainDefPtr def;
+    virDomainObjPtr vm = NULL;
+    virDomainPtr dom = NULL;
+    virDomainEventPtr event = NULL;
+    int dupVM;
+
+    qemuDriverLock(driver);
+    if (!(def = virDomainDefParseString(driver->caps, xml,
+                                        VIR_DOMAIN_XML_INACTIVE)))
+        goto cleanup;
+
+    if (virSecurityManagerVerify(driver->securityManager, def) < 0)
+        goto cleanup;
+
+    if ((dupVM = virDomainObjIsDuplicate(&driver->domains, def, 0)) < 0)
+        goto cleanup;
+
+    if (qemudCanonicalizeMachine(driver, def) < 0)
+        goto cleanup;
+
+    if (qemuDomainAssignPCIAddresses(def) < 0)
+        goto cleanup;
+
+    if (!(vm = virDomainAssignDef(driver->caps,
+                                  &driver->domains,
+                                  def, false))) {
+        goto cleanup;
+    }
+    def = NULL;
+    vm->persistent = 1;
+    
+    if (virDomainSaveConfig(driver->configDir, --> driver->configDir默认将为
+                                                    /etc/libvirt/qemu
+
+                            vm->newDef ? vm->newDef : vm->def) < 0) {
+        VIR_INFO("Defining domain '%s'", vm->def->name);
+        virDomainRemoveInactive(&driver->domains,
+                                vm);
+        vm = NULL;
+        goto cleanup;
+    }
+
+    event = virDomainEventNewFromObj(vm,
+                                     VIR_DOMAIN_EVENT_DEFINED,
+                                     !dupVM ?
+                                     VIR_DOMAIN_EVENT_DEFINED_ADDED :
+                                     VIR_DOMAIN_EVENT_DEFINED_UPDATED);
+
+    VIR_INFO("Creating domain '%s'", vm->def->name);
+    dom = virGetDomain(conn, vm->def->name, vm->def->uuid);
+    if (dom) dom->id = vm->def->id;
+
+cleanup:
+    virDomainDefFree(def);
+    if (vm)
+        virDomainObjUnlock(vm);
+    if (event)
+        qemuDomainEventQueue(driver, event);
+    qemuDriverUnlock(driver);
+    return dom;
+}
+
+//用于持久化保存一个libvirt的config
+int virDomainSaveConfig(const char *configDir,
+                        virDomainDefPtr def)
+{
+    int ret = -1;
+    char *xml;
+
+    if (!(xml = virDomainDefFormat(def,
+                                   VIR_DOMAIN_XML_WRITE_FLAGS)))
+        goto cleanup;
+
+    if (virDomainSaveXML(configDir, def, xml))
+        goto cleanup;
+
+    ret = 0;
+cleanup:
+    VIR_FREE(xml);
+    return ret;
+}
+
